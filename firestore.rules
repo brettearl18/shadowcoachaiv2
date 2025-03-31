@@ -1,0 +1,216 @@
+rules_version = '2';
+
+service cloud.firestore {
+  match /databases/{database}/documents {
+    // Allow read/write access to all documents during development
+    match /{document=**} {
+      allow read, write: if true;
+    }
+    
+    // TODO: Add proper security rules before production
+    // match /clients/{clientId} {
+    //   allow read: if request.auth != null;
+    //   allow write: if request.auth != null && request.auth.uid == resource.data.coachId;
+    // }
+    
+    // match /checkIns/{checkInId} {
+    //   allow read: if request.auth != null;
+    //   allow write: if request.auth != null;
+    // }
+
+    // Helper functions
+    function isAuthenticated() {
+      return request.auth != null;
+    }
+    
+    function isAdmin() {
+      return isAuthenticated() && 
+        get(/databases/$(database)/documents/coaches/$(request.auth.uid)).data.role == 'admin';
+    }
+    
+    function isCoach() {
+      return isAuthenticated() && 
+        exists(/databases/$(database)/documents/coaches/$(request.auth.uid));
+    }
+    
+    function isClient() {
+      return isAuthenticated() && 
+        exists(/databases/$(database)/documents/clients/$(request.auth.uid));
+    }
+    
+    function belongsToOrg(orgId) {
+      return isAuthenticated() && (
+        get(/databases/$(database)/documents/coaches/$(request.auth.uid)).data.organizationId == orgId ||
+        get(/databases/$(database)/documents/clients/$(request.auth.uid)).data.organizationId == orgId
+      );
+    }
+    
+    function isClientCoach(clientId) {
+      return isAuthenticated() && 
+        get(/databases/$(database)/documents/clients/$(clientId)).data.coachId == request.auth.uid;
+    }
+    
+    function isOwner(clientId) {
+      return request.auth.uid == clientId;
+    }
+    
+    function isCoachOfClient(clientId) {
+      return isCoach() && 
+        exists(/databases/$(database)/documents/users/$(clientId)) &&
+        get(/databases/$(database)/documents/users/$(clientId)).data.clientProfile.coachId == request.auth.uid;
+    }
+
+    // Users collection
+    match /users/{userId} {
+      allow read: if isAuthenticated() && (isOwner(userId) || isAdmin() || isCoachOfClient(userId));
+      allow create: if isAuthenticated() && isAdmin();
+      allow update: if isAuthenticated() && (isOwner(userId) || isAdmin());
+      allow delete: if isAdmin();
+      
+      // User progress subcollection
+      match /progress/{progressId} {
+        allow read: if isAuthenticated() && (isOwner(userId) || isAdmin() || isCoachOfClient(userId));
+        allow write: if isAuthenticated() && (isAdmin() || isCoachOfClient(userId));
+      }
+    }
+
+    // Organizations collection
+    match /organizations/{orgId} {
+      allow read: if belongsToOrg(orgId);
+      allow write: if isAdmin();
+    }
+
+    // Templates collection
+    match /templates/{templateId} {
+      allow read: if isAuthenticated() && (
+        resource.data.isPublic || 
+        belongsToOrg(resource.data.organizationId)
+      );
+      allow create: if isCoach();
+      allow update, delete: if isAuthenticated() && (
+        resource.data.coachId == request.auth.uid || 
+        isAdmin()
+      );
+    }
+
+    // Sessions collection
+    match /sessions/{sessionId} {
+      allow read: if isAuthenticated() && (
+        isAdmin() || 
+        isCoachOfClient(resource.data.clientId) || 
+        isOwner(resource.data.clientId)
+      );
+      allow create: if isAuthenticated() && (
+        isAdmin() || 
+        isCoachOfClient(request.resource.data.clientId)
+      );
+      allow update: if isAuthenticated() && (
+        isAdmin() || 
+        isCoachOfClient(resource.data.clientId)
+      );
+      allow delete: if isAdmin();
+    }
+
+    // Activity collection
+    match /activity/{activityId} {
+      allow read: if isAuthenticated() && (
+        isAdmin() || 
+        isCoachOfClient(resource.data.clientId) || 
+        isOwner(resource.data.clientId)
+      );
+      allow create: if isAuthenticated() && (
+        isAdmin() || 
+        isCoachOfClient(request.resource.data.clientId)
+      );
+      allow update, delete: if isAdmin();
+    }
+
+    // Organization stats collection
+    match /organizationStats/{orgId} {
+      allow read: if isAuthenticated() && (
+        isAdmin() || 
+        exists(/databases/$(database)/documents/coaches/$(request.auth.uid)) &&
+        get(/databases/$(database)/documents/coaches/$(request.auth.uid)).data.organizationId == orgId
+      );
+      allow write: if isAdmin();
+    }
+
+    // Check-ins collection
+    match /check-ins/{checkInId} {
+      allow read: if isAuthenticated() && (
+        resource.data.clientId == request.auth.uid || 
+        isClientCoach(resource.data.clientId)
+      );
+      allow create: if isAuthenticated() && (
+        request.resource.data.clientId == request.auth.uid || 
+        isClientCoach(request.resource.data.clientId)
+      );
+      allow update: if isAuthenticated() && (
+        resource.data.clientId == request.auth.uid || 
+        isClientCoach(resource.data.clientId)
+      );
+      allow delete: if isClientCoach(resource.data.clientId);
+    }
+
+    // AI Summaries collection
+    match /ai-summaries/{summaryId} {
+      allow read: if isAuthenticated() && (
+        resource.data.clientId == request.auth.uid || 
+        isClientCoach(resource.data.clientId)
+      );
+      allow create: if isCoach();
+      allow update, delete: if isClientCoach(resource.data.clientId);
+    }
+
+    // Notifications collection
+    match /notifications/{notificationId} {
+      allow read: if isAuthenticated() && 
+        resource.data.userId == request.auth.uid;
+      allow create: if isCoach();
+      allow update: if isAuthenticated() && 
+        resource.data.userId == request.auth.uid;
+      allow delete: if isAuthenticated() && 
+        resource.data.userId == request.auth.uid;
+    }
+
+    // Feedback collection
+    match /feedback/{feedbackId} {
+      allow read: if isAuthenticated() && (
+        resource.data.clientId == request.auth.uid || 
+        resource.data.coachId == request.auth.uid
+      );
+      allow create: if isAuthenticated() && (
+        request.resource.data.clientId == request.auth.uid || 
+        request.resource.data.coachId == request.auth.uid
+      );
+      allow update: if isAuthenticated() && (
+        resource.data.coachId == request.auth.uid
+      );
+      allow delete: if resource.data.coachId == request.auth.uid;
+    }
+
+    // Client collection rules
+    match /clients/{clientId} {
+      allow read: if isAuthenticated() && (
+        request.auth.uid == clientId || 
+        isClientCoach(clientId)
+      );
+      allow write: if isAuthenticated() && isOwner(clientId);
+      
+      // Allow coaches to read client data
+      allow read: if isAuthenticated() && 
+        exists(/databases/$(database)/documents/coaches/$(request.auth.uid)/clients/$(clientId));
+    }
+
+    // Check-ins collection rules
+    match /checkIns/{checkInId} {
+      allow read: if isAuthenticated() && (
+        isOwner(resource.data.clientId) || 
+        exists(/databases/$(database)/documents/coaches/$(request.auth.uid)/clients/$(resource.data.clientId))
+      );
+      
+      allow create: if isAuthenticated() && isOwner(request.resource.data.clientId);
+      allow update, delete: if isAuthenticated() && isOwner(resource.data.clientId);
+    }
+  }
+}

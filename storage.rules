@@ -1,0 +1,94 @@
+rules_version = '2';
+
+// Craft rules based on data in your Firestore database
+// allow write: if firestore.get(
+//    /databases/(default)/documents/users/$(request.auth.uid)).data.isAdmin;
+service firebase.storage {
+  match /b/{bucket}/o {
+    // Helper functions
+    function isAuthenticated() {
+      return request.auth != null;
+    }
+    
+    function isAdmin() {
+      return isAuthenticated() && 
+        firestore.get(/databases/(default)/documents/users/$(request.auth.uid)).data.role == 'admin';
+    }
+    
+    function isCoach() {
+      return isAuthenticated() && 
+        firestore.get(/databases/(default)/documents/users/$(request.auth.uid)).data.role == 'coach';
+    }
+    
+    function isClient() {
+      return isAuthenticated() && 
+        firestore.get(/databases/(default)/documents/users/$(request.auth.uid)).data.role == 'client';
+    }
+    
+    function isOwner(userId) {
+      return isAuthenticated() && request.auth.uid == userId;
+    }
+
+    function isOwner(clientId) {
+      return request.auth.uid == clientId;
+    }
+    
+    function isValidImage() {
+      return request.resource.contentType.matches('image/.*')
+        && request.resource.size <= 10 * 1024 * 1024; // 10MB max
+    }
+    
+    function isValidAttachment() {
+      return request.resource.size <= 20 * 1024 * 1024; // 20MB max
+    }
+
+    // Profile images
+    match /users/{userId}/profile/{fileName} {
+      allow read: if isAuthenticated();
+      allow write: if isAuthenticated() && isOwner(userId);
+      allow delete: if isAuthenticated() && (isOwner(userId) || isAdmin());
+    }
+
+    // Check-in photos
+    match /check-ins/{checkInId}/photos/{fileName} {
+      allow read: if isAuthenticated() && (
+        isAdmin() || 
+        isOwner(resource.metadata.clientId) || 
+        firestore.get(/databases/(default)/documents/users/$(resource.metadata.clientId)).data.clientProfile.coachId == request.auth.uid
+      );
+      allow write: if isAuthenticated() && (
+        isAdmin() || 
+        isOwner(resource.metadata.clientId) || 
+        firestore.get(/databases/(default)/documents/users/$(resource.metadata.clientId)).data.clientProfile.coachId == request.auth.uid
+      );
+      allow delete: if isAuthenticated() && (isAdmin() || isOwner(resource.metadata.clientId));
+    }
+
+    // Organization assets
+    match /organizations/{orgId}/{fileName} {
+      allow read: if isAuthenticated();
+      allow write: if isAuthenticated() && isAdmin();
+      allow delete: if isAuthenticated() && isAdmin();
+    }
+
+    // Progress photos rules
+    match /progress-photos/{clientId}/{fileName} {
+      allow read: if isAuthenticated() && (
+        isOwner(clientId) ||
+        exists(/databases/$(database)/documents/coaches/$(request.auth.uid)/clients/$(clientId))
+      );
+      allow create: if isAuthenticated() && isOwner(clientId) && isValidImage();
+      allow delete: if isAuthenticated() && isOwner(clientId);
+    }
+
+    // Attachments rules
+    match /attachments/{clientId}/{fileName} {
+      allow read: if isAuthenticated() && (
+        isOwner(clientId) ||
+        exists(/databases/$(database)/documents/coaches/$(request.auth.uid)/clients/$(clientId))
+      );
+      allow create: if isAuthenticated() && isOwner(clientId) && isValidAttachment();
+      allow delete: if isAuthenticated() && isOwner(clientId);
+    }
+  }
+}
