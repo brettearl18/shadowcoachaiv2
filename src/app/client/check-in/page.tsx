@@ -18,14 +18,40 @@ interface CheckInData {
   answers: Record<number, number>;
   scores: {
     overall: number;
-    categories: Record<string, {
-      score: number;
-      maxPossible: number;
-      percentage: number;
-    }>;
+    categories: {
+      nutrition: { score: number; maxPossible: number; percentage: number };
+      training: { score: number; maxPossible: number; percentage: number };
+      recovery: { score: number; maxPossible: number; percentage: number };
+    };
+  };
+  measurements: {
+    weight: {
+      current: number;
+      previousWeek: number;
+      starting: number;
+    };
+    bodyFat: {
+      current: number;
+      previousWeek: number;
+      starting: number;
+    };
+    chest: {
+      current: number;
+      previousWeek: number;
+      starting: number;
+    };
+    waist: {
+      current: number;
+      previousWeek: number;
+      starting: number;
+    };
+    hips: {
+      current: number;
+      previousWeek: number;
+      starting: number;
+    };
   };
   photos?: string[];
-  measurements?: Record<string, number>;
   notes?: string;
   attachments?: Array<{
     name: string;

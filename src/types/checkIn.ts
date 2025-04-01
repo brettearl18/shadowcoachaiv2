@@ -8,28 +8,32 @@ export interface CategoryScore {
 
 export interface CheckInData {
   id?: string;
-  clientId: string;
-  date: Date;
-  scores: {
-    overall: number;
-    categories: Record<string, CategoryScore>;
-  };
-  answers: Record<number, number>;
-  measurements: {
+  date: string;
+  measurements?: {
     weight?: number;
     bodyFat?: number;
     chest?: number;
     waist?: number;
     hips?: number;
-    arms?: number;
-    legs?: number;
     [key: string]: number | undefined;
   };
-  photos: string[];
+  scores?: {
+    overall: number;
+    categories: {
+      [key: string]: {
+        score: number;
+        maxPossible: number;
+        percentage: number;
+      };
+    };
+  };
   notes?: string;
-  coachFeedback?: string;
-  status: 'pending' | 'completed' | 'reviewed';
-  weekNumber?: number;
+  photos?: string[];
+  coachReview?: {
+    status: 'pending' | 'reviewed' | 'flagged';
+    feedback?: string;
+    reviewedAt?: string;
+  };
 }
 
 export interface CheckInHistoryResponse {

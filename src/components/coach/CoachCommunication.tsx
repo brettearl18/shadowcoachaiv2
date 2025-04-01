@@ -2,22 +2,18 @@
 
 import { useState, useEffect } from 'react';
 import { clientService } from '@/services/clientService';
+import { messageService, Message } from '@/services/messageService';
+import { useAuth } from '@/hooks/useAuth';
+import { useNotifications } from '@/hooks/useNotifications';
 import {
   ChatBubbleLeftRightIcon,
   PaperAirplaneIcon,
   UserCircleIcon,
   CalendarIcon,
-  BellIcon
+  BellIcon,
+  CheckCircleIcon,
+  MagnifyingGlassIcon
 } from '@heroicons/react/24/outline';
-
-interface Message {
-  id: string;
-  senderId: string;
-  receiverId: string;
-  content: string;
-  timestamp: string;
-  read: boolean;
-}
 
 interface Notification {
   id: string;
@@ -38,15 +34,43 @@ interface ScheduledSession {
   notes?: string;
 }
 
+interface ClientWithStatus extends Client {
+  id: string;
+  firstName: string;
+  lastName: string;
+  email: string;
+  lastActive?: string;
+  status?: 'online' | 'offline' | 'away';
+}
+
 export function CoachCommunication() {
+  const { user } = useAuth();
+  const { notifications, setNotifications } = useNotifications();
   const [selectedClient, setSelectedClient] = useState<string | null>(null);
   const [clients, setClients] = useState<any[]>([]);
   const [messages, setMessages] = useState<Message[]>([]);
-  const [notifications, setNotifications] = useState<Notification[]>([]);
   const [sessions, setSessions] = useState<ScheduledSession[]>([]);
   const [newMessage, setNewMessage] = useState('');
   const [loading, setLoading] = useState(true);
   const [activeTab, setActiveTab] = useState<'messages' | 'notifications' | 'schedule'>('messages');
+  const [searchQuery, setSearchQuery] = useState('');
+  const [isTyping, setIsTyping] = useState(false);
+
+  useEffect(() => {
+    if (!user) return;
+    
+    // Subscribe to real-time messages
+    const unsubscribe = messageService.subscribeToMessages(user.uid, (newMessages) => {
+      setMessages(prev => {
+        const combined = [...prev, ...newMessages];
+        // Remove duplicates and sort by timestamp
+        return Array.from(new Map(combined.map(m => [m.id, m])).values())
+          .sort((a, b) => b.timestamp - a.timestamp);
+      });
+    });
+
+    return () => unsubscribe();
+  }, [user]);
 
   useEffect(() => {
     loadInitialData();
@@ -58,29 +82,10 @@ export function CoachCommunication() {
       const allClients = await clientService.getAllClients();
       setClients(allClients);
       
-      // Load mock data for now
-      setMessages([
-        {
-          id: '1',
-          senderId: 'client1',
-          receiverId: 'coach1',
-          content: 'Hi coach, I completed my check-in for today!',
-          timestamp: new Date().toISOString(),
-          read: false
-        }
-      ]);
-
-      setNotifications([
-        {
-          id: '1',
-          type: 'check-in',
-          clientId: 'client1',
-          clientName: 'John Doe',
-          content: 'Completed their weekly check-in',
-          timestamp: new Date().toISOString(),
-          read: false
-        }
-      ]);
+      if (user) {
+        const userMessages = await messageService.getMessages(user.uid);
+        setMessages(userMessages);
+      }
 
       setSessions([
         {
@@ -100,36 +105,71 @@ export function CoachCommunication() {
   };
 
   const handleSendMessage = async () => {
-    if (!newMessage.trim() || !selectedClient) return;
+    if (!newMessage.trim() || !selectedClient || !user) return;
 
-    const message = {
-      id: Date.now().toString(),
-      senderId: 'coach1',
-      receiverId: selectedClient,
-      content: newMessage,
-      timestamp: new Date().toISOString(),
-      read: false
-    };
-
-    setMessages(prev => [...prev, message]);
-    setNewMessage('');
-    
     try {
-      // Send message to backend
-      // await messageService.sendMessage(message);
+      await messageService.sendMessage({
+        senderId: user.uid,
+        receiverId: selectedClient,
+        content: newMessage.trim(),
+        read: false
+      });
+      setNewMessage('');
     } catch (error) {
       console.error('Error sending message:', error);
     }
   };
 
-  const markNotificationAsRead = (notificationId: string) => {
-    setNotifications(prev =>
-      prev.map(notification =>
-        notification.id === notificationId
-          ? { ...notification, read: true }
-          : notification
-      )
+  const handleMarkAsRead = async (messageId: string) => {
+    try {
+      await messageService.markAsRead(messageId);
+    } catch (error) {
+      console.error('Error marking message as read:', error);
+    }
+  };
+
+  const markNotificationAsRead = async (notificationId: string) => {
+    try {
+      await messageService.markAsRead(notificationId);
+      setNotifications(prev =>
+        prev.map(notification =>
+          notification.id === notificationId
+            ? { ...notification, read: true }
+            : notification
+        )
+      );
+    } catch (error) {
+      console.error('Error marking notification as read:', error);
+    }
+  };
+
+  const filteredClients = clients.filter(client => {
+    const searchLower = searchQuery.toLowerCase();
+    return (
+      client.firstName?.toLowerCase().includes(searchLower) ||
+      client.lastName?.toLowerCase().includes(searchLower) ||
+      client.email?.toLowerCase().includes(searchLower)
     );
+  });
+
+  const formatMessageTime = (timestamp: any) => {
+    if (!timestamp) return '';
+    const date = timestamp.toDate ? timestamp.toDate() : new Date(timestamp);
+    const now = new Date();
+    const diff = now.getTime() - date.getTime();
+    const days = Math.floor(diff / (1000 * 60 * 60 * 24));
+    
+    if (days > 7) {
+      return date.toLocaleDateString();
+    } else if (days > 0) {
+      return `${days}d ago`;
+    } else {
+      const hours = Math.floor(diff / (1000 * 60 * 60));
+      if (hours > 0) return `${hours}h ago`;
+      const minutes = Math.floor(diff / (1000 * 60));
+      if (minutes > 0) return `${minutes}m ago`;
+      return 'Just now';
+    }
   };
 
   if (loading) {
@@ -144,26 +184,30 @@ export function CoachCommunication() {
     <div className="p-6">
       {/* Tab Navigation */}
       <div className="mb-6">
-        <nav className="flex space-x-4" aria-label="Tabs">
+        <nav className="flex space-x-4 bg-white rounded-lg p-1 shadow-sm" aria-label="Tabs">
           {[
             { id: 'messages', label: 'Messages', icon: ChatBubbleLeftRightIcon },
-            { id: 'notifications', label: 'Notifications', icon: BellIcon },
+            { id: 'notifications', label: 'Notifications', icon: BellIcon, count: notifications.filter(n => !n.read).length },
             { id: 'schedule', label: 'Schedule', icon: CalendarIcon }
           ].map(tab => (
             <button
               key={tab.id}
               onClick={() => setActiveTab(tab.id as typeof activeTab)}
               className={`
+                flex items-center space-x-2 px-4 py-2 rounded-md transition-all duration-200 ease-in-out
                 ${activeTab === tab.id
-                  ? 'bg-blue-100 text-blue-700'
-                  : 'text-gray-500 hover:text-gray-700'
+                  ? 'bg-primary text-white shadow-sm'
+                  : 'text-gray-600 hover:bg-gray-50'
                 }
-                px-3 py-2 font-medium text-sm rounded-md
-                flex items-center space-x-2 transition-colors
               `}
             >
               <tab.icon className="h-5 w-5" />
               <span>{tab.label}</span>
+              {tab.count > 0 && (
+                <span className="ml-2 px-2 py-0.5 text-xs bg-red-500 text-white rounded-full">
+                  {tab.count}
+                </span>
+              )}
             </button>
           ))}
         </nav>
@@ -173,39 +217,76 @@ export function CoachCommunication() {
       {activeTab === 'messages' && (
         <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
           {/* Client List */}
-          <div className="bg-white rounded-lg shadow-sm p-4">
-            <h3 className="font-medium text-gray-900 mb-4">Clients</h3>
-            <div className="space-y-2">
-              {clients.map(client => (
+          <div className="bg-white rounded-lg shadow-sm overflow-hidden">
+            <div className="p-4 border-b">
+              <div className="relative">
+                <input
+                  type="text"
+                  placeholder="Search clients..."
+                  value={searchQuery}
+                  onChange={(e) => setSearchQuery(e.target.value)}
+                  className="w-full pl-10 pr-4 py-2 border rounded-lg bg-gray-50 focus:bg-white focus:ring-2 focus:ring-primary focus:border-transparent"
+                />
+                <MagnifyingGlassIcon className="h-5 w-5 text-gray-400 absolute left-3 top-2.5" />
+              </div>
+            </div>
+            <div className="divide-y max-h-[600px] overflow-y-auto">
+              {filteredClients.map(client => (
                 <button
                   key={client.id}
                   onClick={() => setSelectedClient(client.id)}
                   className={`
-                    w-full flex items-center space-x-3 p-2 rounded-lg
+                    w-full flex items-center p-4 transition-colors duration-150
                     ${selectedClient === client.id
-                      ? 'bg-blue-50 text-blue-700'
-                      : 'hover:bg-gray-50'
+                      ? 'bg-primary/5 border-l-4 border-primary'
+                      : 'hover:bg-gray-50 border-l-4 border-transparent'
                     }
                   `}
                 >
-                  <UserCircleIcon className="h-8 w-8 text-gray-400" />
-                  <div className="text-left">
-                    <div className="font-medium">
+                  <div className="relative">
+                    <UserCircleIcon className="h-10 w-10 text-gray-400" />
+                    <div className={`absolute bottom-0 right-0 h-3 w-3 rounded-full border-2 border-white
+                      ${client.status === 'online' ? 'bg-green-500' : 
+                        client.status === 'away' ? 'bg-yellow-500' : 'bg-gray-400'}
+                    `} />
+                  </div>
+                  <div className="ml-3 flex-1 text-left">
+                    <div className="font-medium text-gray-900">
                       {client.firstName} {client.lastName}
                     </div>
-                    <div className="text-sm text-gray-500">{client.email}</div>
+                    <div className="text-sm text-gray-500 truncate">{client.email}</div>
                   </div>
+                  {client.lastActive && (
+                    <div className="text-xs text-gray-400">
+                      {formatMessageTime(client.lastActive)}
+                    </div>
+                  )}
                 </button>
               ))}
             </div>
           </div>
 
           {/* Message Thread */}
-          <div className="lg:col-span-2 bg-white rounded-lg shadow-sm p-4">
+          <div className="lg:col-span-2 bg-white rounded-lg shadow-sm flex flex-col h-[calc(100vh-12rem)]">
             {selectedClient ? (
               <>
+                {/* Selected Client Header */}
+                <div className="p-4 border-b flex items-center justify-between">
+                  <div className="flex items-center">
+                    <UserCircleIcon className="h-8 w-8 text-gray-400" />
+                    <div className="ml-3">
+                      <div className="font-medium text-gray-900">
+                        {clients.find(c => c.id === selectedClient)?.firstName} {clients.find(c => c.id === selectedClient)?.lastName}
+                      </div>
+                      <div className="text-sm text-gray-500">
+                        {clients.find(c => c.id === selectedClient)?.email}
+                      </div>
+                    </div>
+                  </div>
+                </div>
+
                 {/* Messages */}
-                <div className="h-[400px] overflow-y-auto mb-4 space-y-4">
+                <div className="flex-1 overflow-y-auto p-4 space-y-4">
                   {messages
                     .filter(m =>
                       m.senderId === selectedClient ||
@@ -214,30 +295,27 @@ export function CoachCommunication() {
                     .map(message => (
                       <div
                         key={message.id}
-                        className={`
-                          flex ${message.senderId === 'coach1' ? 'justify-end' : 'justify-start'}
-                        `}
+                        className={`flex ${message.senderId === user?.uid ? 'justify-end' : 'justify-start'}`}
                       >
                         <div
                           className={`
-                            max-w-[70%] rounded-lg p-3
-                            ${message.senderId === 'coach1'
-                              ? 'bg-blue-500 text-white'
-                              : 'bg-gray-100 text-gray-900'
+                            max-w-[70%] rounded-lg p-3 shadow-sm
+                            ${message.senderId === user?.uid
+                              ? 'bg-primary text-white rounded-br-none'
+                              : 'bg-gray-100 text-gray-900 rounded-bl-none'
                             }
                           `}
                         >
-                          <p>{message.content}</p>
-                          <div
-                            className={`
-                              text-xs mt-1
-                              ${message.senderId === 'coach1'
-                                ? 'text-blue-100'
-                                : 'text-gray-500'
-                              }
-                            `}
-                          >
-                            {new Date(message.timestamp).toLocaleTimeString()}
+                          <p className="whitespace-pre-wrap">{message.content}</p>
+                          <div className="flex items-center justify-end mt-1 space-x-1">
+                            <span className={`text-xs ${message.senderId === user?.uid ? 'text-white/70' : 'text-gray-500'}`}>
+                              {formatMessageTime(message.timestamp)}
+                            </span>
+                            {message.senderId === user?.uid && (
+                              <CheckCircleIcon 
+                                className={`h-4 w-4 ${message.read ? 'text-white' : 'text-white/70'}`} 
+                              />
+                            )}
                           </div>
                         </div>
                       </div>
@@ -245,26 +323,40 @@ export function CoachCommunication() {
                 </div>
 
                 {/* Message Input */}
-                <div className="flex space-x-2">
-                  <input
-                    type="text"
-                    value={newMessage}
-                    onChange={(e) => setNewMessage(e.target.value)}
-                    placeholder="Type your message..."
-                    className="flex-1 p-2 border rounded-lg"
-                    onKeyPress={(e) => e.key === 'Enter' && handleSendMessage()}
-                  />
-                  <button
-                    onClick={handleSendMessage}
-                    className="p-2 bg-blue-500 text-white rounded-lg hover:bg-blue-600"
-                  >
-                    <PaperAirplaneIcon className="h-5 w-5" />
-                  </button>
+                <div className="p-4 border-t">
+                  <div className="flex space-x-2">
+                    <input
+                      type="text"
+                      value={newMessage}
+                      onChange={(e) => {
+                        setNewMessage(e.target.value);
+                        setIsTyping(true);
+                        setTimeout(() => setIsTyping(false), 1000);
+                      }}
+                      placeholder="Type your message..."
+                      className="flex-1 p-3 border rounded-lg focus:ring-2 focus:ring-primary focus:border-transparent"
+                      onKeyPress={(e) => e.key === 'Enter' && handleSendMessage()}
+                    />
+                    <button
+                      onClick={handleSendMessage}
+                      disabled={!newMessage.trim()}
+                      className="p-3 bg-primary text-white rounded-lg hover:bg-primary-dark transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+                    >
+                      <PaperAirplaneIcon className="h-5 w-5" />
+                    </button>
+                  </div>
+                  {isTyping && (
+                    <div className="text-xs text-gray-400 mt-1">
+                      Typing...
+                    </div>
+                  )}
                 </div>
               </>
             ) : (
-              <div className="h-[400px] flex items-center justify-center text-gray-500">
-                Select a client to start messaging
+              <div className="h-full flex flex-col items-center justify-center text-gray-500">
+                <ChatBubbleLeftRightIcon className="h-12 w-12 mb-4" />
+                <p className="text-lg font-medium">Select a client to start messaging</p>
+                <p className="text-sm">Choose from your client list on the left</p>
               </div>
             )}
           </div>
